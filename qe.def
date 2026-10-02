@@ -1,0 +1,112 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+%labels
+    Description "Portable CPU Quantum ESPRESSO 7.6 with OlloSC"
+    QE.branch "doublelayer/q-e:ollosc/qe-7.6"
+    MPI "OpenMPI"
+    Parallelism "MPI + OpenMP"
+    LinearAlgebra "OpenBLAS + ScaLAPACK"
+
+%environment
+    export QE_ROOT=/opt/qe
+    export PATH=/opt/qe/bin:/opt/wannier90-dlwf:${PATH:-}
+    export LD_LIBRARY_PATH=/opt/qe/lib:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}
+    export PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+    export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
+    export OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-1}
+    export OMP_PROC_BIND=${OMP_PROC_BIND:-spread}
+    export OMP_PLACES=${OMP_PLACES:-cores}
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=UTC
+    export BUILD_JOBS="$(nproc)"
+    export QE_PREFIX=/opt/qe
+    export W90_PREFIX=/opt/wannier90-dlwf
+    export SOURCE_DIR=/opt/src
+    export FFTW3_ROOT=/usr
+    export FFTW3_DIR=/usr/lib/x86_64-linux-gnu
+    export LIBXC_ROOT=/usr
+    export PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}
+
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        ca-certificates git pkg-config \
+        build-essential gfortran cmake ninja-build \
+        openmpi-bin libopenmpi-dev \
+        libopenblas-openmp-dev libblas-dev liblapack-dev \
+        libscalapack-openmpi-dev \
+        libfftw3-dev libfftw3-mpi-dev \
+        libxc-dev \
+        libgomp1 libgfortran5
+
+    mkdir -p "$SOURCE_DIR" /opt/qe-source
+    cd "$SOURCE_DIR"
+
+    # The QE fork contains the OlloSC port.  Initialize QE's regular
+    # Wannier90 submodule for pw2wannier90.x.
+    git clone --depth 1 --branch ollosc/qe-7.6 --single-branch \
+        --recurse-submodules --shallow-submodules \
+        https://github.com/doublelayer/q-e.git q-e
+    cd q-e
+    git rev-parse HEAD > /opt/qe-source/qe-commit.txt
+    cp PORTING.md /opt/qe-source/PORTING.md
+
+    # OlloSC uses the separate DLWF/costSE Wannier90 fork.  It is deliberately
+    # kept outside QE's standard Wannier90 submodule.
+    git clone --depth 1 --branch costSE --single-branch \
+        https://github.com/mtesseracted/wannier90.git "$SOURCE_DIR/wannier90-dlwf"
+    cd "$SOURCE_DIR/wannier90-dlwf"
+    git rev-parse HEAD > /opt/qe-source/wannier90-dlwf-commit.txt
+    # Wannier90's config/make.inc.gfort is a compiler-settings fragment,
+    # not a makefile.  Copy it to the location included by the real Makefile
+    # and build only the wannier90.x executable needed by the OlloSC workflow.
+    cp config/make.inc.gfort make.inc
+    make -j"$BUILD_JOBS" wannier
+    install -Dm755 wannier90.x "$W90_PREFIX/wannier90.x"
+
+    # Build QE with portable x86-64 flags.  The MPI wrappers select the GNU
+    # compilers consistently for both AMD and Intel hosts.
+    cd "$SOURCE_DIR/q-e"
+    cmake -S . -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER=mpicc \
+        -DCMAKE_Fortran_COMPILER=mpifort \
+        -DCMAKE_C_FLAGS="-O3 -fPIC -march=x86-64 -mtune=generic" \
+        -DCMAKE_Fortran_FLAGS="-O3 -fPIC -march=x86-64 -mtune=generic -fopenmp -fallow-argument-mismatch -w" \
+        -DCMAKE_INSTALL_PREFIX="$QE_PREFIX" \
+        -DQE_ENABLE_MPI=ON \
+        -DQE_ENABLE_MPI_MODULE=ON \
+        -DQE_ENABLE_OPENMP=ON \
+        -DQE_ENABLE_SCALAPACK=ON \
+        -DQE_ENABLE_ELPA=OFF \
+        -DQE_ENABLE_LIBXC=ON \
+        -DQE_ENABLE_HDF5=OFF \
+        -DQE_ENABLE_TEST=OFF \
+        -DQE_ENABLE_DOC=OFF \
+        -DQE_FFTW_VENDOR=FFTW3 \
+        -DBLA_VENDOR=OpenBLAS \
+        -DSCALAPACK_LIBDIR=/usr/lib/x86_64-linux-gnu \
+        -DSCALAPACK_scalapack_LIBRARY=/usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so \
+        -DFFTW3_ROOT=/usr \
+        -DLIBXC_ROOT=/usr \
+        -DCMAKE_PREFIX_PATH="/usr;/usr/lib/x86_64-linux-gnu"
+    # QE's install manifest covers all enabled libraries and executables.
+    # Build the default target set so every installed artifact exists;
+    # tests and documentation remain disabled above.
+    cmake --build build --parallel "$BUILD_JOBS"
+    cmake --install build
+
+    # Keep the input and source provenance available in the image.
+    install -Dm644 PORTING.md /opt/qe/share/qe/PORTING.md
+    install -Dm644 /opt/qe-source/qe-commit.txt /opt/qe/share/qe/qe-commit.txt
+    install -Dm644 /opt/qe-source/wannier90-dlwf-commit.txt /opt/qe/share/qe/wannier90-dlwf-commit.txt
+    install -Dm755 "$W90_PREFIX/wannier90.x" "$QE_PREFIX/bin/wannier90-dlwf.x"
+
+    ldconfig
+    apt-get clean
+    rm -rf /var/lib/apt/lists/* "$SOURCE_DIR" /root/.cache
