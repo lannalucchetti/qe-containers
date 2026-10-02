@@ -75,5 +75,16 @@ From: intel/oneapi-toolkit:latest
 
     cd "$SOURCE_DIR/q-e"
 
-    # ./configure
-    # make pw -j 16
+    # TODO LANNA
+    ./configure LIBDIRS="/opt/intel/oneapi/mkl /opt/intel/oneapi/mpi /opt/intel/oneapi/compiler" --enable-parallel --with-scalapack=intel FC=ifort F90=ifort mpif90=mpiifort CC=icc mpicc=mpiicc
+    make pw -j 16
+
+    # Keep the input and source provenance available in the image.
+    install -Dm644 PORTING.md /opt/qe/share/qe/PORTING.md
+    install -Dm644 /opt/qe-source/qe-commit.txt /opt/qe/share/qe/qe-commit.txt
+    install -Dm644 /opt/qe-source/wannier90-dlwf-commit.txt /opt/qe/share/qe/wannier90-dlwf-commit.txt
+    install -Dm755 "$W90_PREFIX/wannier90.x" "$QE_PREFIX/bin/wannier90-dlwf.x"
+
+    ldconfig
+    apt-get clean
+    rm -rf /var/lib/apt/lists/* "$SOURCE_DIR" /root/.cache
