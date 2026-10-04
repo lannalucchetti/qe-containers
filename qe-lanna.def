@@ -75,8 +75,9 @@ From: intel/oneapi-toolkit:latest
 
     cd "$SOURCE_DIR/q-e"
 
+
     # TODO LANNA
-    ./configure LIBDIRS="/opt/intel/oneapi/mkl /opt/intel/oneapi/mpi /opt/intel/oneapi/compiler" --enable-parallel --with-scalapack=intel FC=ifort F90=ifort mpif90=mpiifort CC=icc mpicc=mpiicc
+    ./configure LIBDIRS="/opt/intel/oneapi/mkl /opt/intel/oneapi/mpi /opt/intel/oneapi/compiler" --enable-parallel --with-scalapack=intel FC=ifx F90=ifx mpif90=mpiifort CC=icx mpicc=mpiicc
     make pw -j 16
 
     # Keep the input and source provenance available in the image.
